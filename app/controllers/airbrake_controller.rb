@@ -143,14 +143,16 @@ class AirbrakeController < ApplicationController
   def build_subject
     error_class = @notice['error']['class']
     # if there's only one line, it gets parsed into a hash instead of an array
+    # the split is to remove [PROJECT_ROOT] etc... from within the begining of the file name makes it nicer when listing issues
     if @notice['error']['backtrace']['line'].is_a? Hash
-      file = @notice['error']['backtrace']['line']['file']
+      file = @notice['error']['backtrace']['line']['file'].split(']/').last
       line = @notice['error']['backtrace']['line']['number']
     else
-      file = @notice['error']['backtrace']['line'].first()['file']
+      file = @notice['error']['backtrace']['line'].first()['file'].split(']/').last
       line = @notice['error']['backtrace']['line'].first()['number']
     end
-    "[Airbrake] #{error_class} in #{file}:#{line}"[0..254]
+
+    "#{error_class} in #{file}:#{line}"[0..254]
   end
   
   def find_or_create_custom_fields
