@@ -21,12 +21,16 @@ class AirbrakeController < ApplicationController
     read_settings(redmine_params)
 
     subject = build_subject
-    @issue = Issue.find_by_subject_and_project_id_and_tracker_id(subject, @settings[:project].id, @settings[:tracker].id)
-    
+    @issue = Issue.find_by_subject_and_project_id_and_tracker_id(subject, @settings[:project].id, @settings[:tracker].id, :order => 'id DESC')
+
     if @issue.nil?
       create_new_issue
-    else
+    elsif @issue.custom_value_for(@environment_field.id).value == @notice['server_environment']['environment_name']
+      # I want to be able to also do this but it doesn't seem to work
+      #  @issue.custom_value_for(@application_field.id).value == @settings[:application]
       update_existing_issue
+    else
+      create_new_issue
     end
     
     render :layout => false
@@ -80,6 +84,7 @@ class AirbrakeController < ApplicationController
     @settings[:author] = User.find_by_login(params[:login]) if params.has_key?(:login)
     @settings[:category] = IssueCategory.find_by_name(params[:category]) if params.has_key?(:category)
     @settings[:assign_to] = User.find_by_login(params[:assigned_to]) if params.has_key?(:assigned_to)
+    @settings[:application] = params[:application] if params.has_key?(:application)
 
     read_local_settings
     check_custom_field_assignments
@@ -106,6 +111,8 @@ class AirbrakeController < ApplicationController
     @issue.description = render_to_string(:partial => 'issue_description')
     @issue.status = issue_status_open
     @issue.custom_values.build(:custom_field => @occurrences_field, :value => '1')
+    @issue.custom_values.build(:custom_field => @last_occured_field, :value => Time.now.to_date.to_s )
+    @issue.custom_values.build(:custom_field => @application_field, :value => @settings[:application])
     @issue.custom_values.build(:custom_field => @environment_field, :value => @notice['server_environment']['environment_name'])
     @issue.custom_values.build(:custom_field => @version_field, :value => @notice['server_environment']['app_version']) unless @notice['server_environment']['app_version'].nil?
     @issue.save!
@@ -125,7 +132,7 @@ class AirbrakeController < ApplicationController
       @issue.init_journal(@settings[:author], "h4. Issue reopened after occurring again in #{environment_name} environment")
     end
     number_occurrences = @issue.custom_value_for(@occurrences_field.id).value
-    @issue.custom_field_values = { @occurrences_field.id => (number_occurrences.to_i+1).to_s }
+    @issue.custom_field_values = { @occurrences_field.id => (number_occurrences.to_i+1).to_s, @last_occured_field.id => Time.now.to_date.to_s }
     @issue.save!
   end
   
@@ -153,6 +160,18 @@ class AirbrakeController < ApplicationController
       @occurrences_field.save(false)
     end
     
+    @last_occured_field = IssueCustomField.find_or_initialize_by_name('Last occurance')
+    if @last_occured_field.new_record?
+      @last_occured_field.attributes = {:field_format => 'date', :default_value => '', :is_filter => true}
+      @last_occured_field.save(false)
+    end
+
+    @application_field = IssueCustomField.find_or_initialize_by_name('Application')
+    if @application_field.new_record?
+      @application_field.attributes = {:field_format => 'string', :default_value => '', :is_filter => true}
+      @application_field.save(false)
+    end
+
     @environment_field = IssueCustomField.find_or_initialize_by_name('Environment')
     if @environment_field.new_record?
       @environment_field.attributes = {:field_format => 'string', :default_value => 'production', :is_filter => true}
