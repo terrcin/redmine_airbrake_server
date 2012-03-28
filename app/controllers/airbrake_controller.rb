@@ -25,9 +25,8 @@ class AirbrakeController < ApplicationController
 
     if @issue.nil?
       create_new_issue
-    elsif @issue.custom_value_for(@environment_field.id).value == @notice['server_environment']['environment_name']
-      # I want to be able to also do this but it doesn't seem to work
-      #  @issue.custom_value_for(@application_field.id).value == @settings[:application]
+    elsif @issue.custom_value_for(@environment_field.id).value == @notice['server_environment']['environment_name'] && @issue.custom_value_for(@application_field.id).value == redmine_params[:application]
+      
       update_existing_issue
     else
       create_new_issue
@@ -109,7 +108,7 @@ class AirbrakeController < ApplicationController
     @issue.assigned_to = @settings[:assign_to]
     @issue.priority = @settings[:priority] unless @settings[:priority].nil?
     @issue.description = render_to_string(:partial => 'issue_description')
-    @issue.status = issue_status_open
+    @issue.status = IssueStatus.default
     @issue.custom_values.build(:custom_field => @occurrences_field, :value => '1')
     @issue.custom_values.build(:custom_field => @last_occured_field, :value => Time.now.to_date.to_s )
     @issue.custom_values.build(:custom_field => @application_field, :value => @settings[:application])
@@ -126,20 +125,29 @@ class AirbrakeController < ApplicationController
   end
   
   def update_existing_issue
-    environment_name = @notice['server_environment']['environment_name']
-    if (['always', environment_name].include?(@settings[:reopen_strategy]))
-      @issue.status = issue_status_open if @issue.status.is_closed?
-      @issue.init_journal(@settings[:author], "h4. Issue reopened after occurring again in #{environment_name} environment")
-    end
+
     number_occurrences = @issue.custom_value_for(@occurrences_field.id).value
     @issue.custom_field_values = { @occurrences_field.id => (number_occurrences.to_i+1).to_s, @last_occured_field.id => Time.now.to_date.to_s }
+
+    if @issue.closed?
+      @issue.status = IssueStatus.default
+      environment_name = @notice['server_environment']['environment_name']
+      journal = @issue.init_journal(@settings[:author], "h4. Issue reopened after happening again.Occurances was at #{number_occurrences.to_s}")
+      journal.notes = render_to_string(:partial => 'issue_description')  # put in new call stack just in case it's relavant. the issue had closed after all.
+      journal.save
+    elsif number_occurrences % 10 == 0  
+      journal = @issue.journals.new :version => @issue.journals.maximum(:version)+1
+      journal.notes = journal.notes = render_to_string(:partial => 'issue_description')  # put in new call stack every now and again just in case it's relavant
+      journal.save
+    end
+
     @issue.save!
+    begin
+      @issue.touch  # forcing this as the above doesn't actually change the updated_on field all the time
+    rescue
+    end
   end
-  
-  def issue_status_open
-    IssueStatus.find(:first, :conditions => {:is_default => true}, :order => 'position ASC')
-  end
-   
+     
   def build_subject
     error_class = @notice['error']['class']
     # if there's only one line, it gets parsed into a hash instead of an array
@@ -152,7 +160,7 @@ class AirbrakeController < ApplicationController
       line = @notice['error']['backtrace']['line'].first()['number']
     end
 
-    "#{error_class} in #{file}:#{line}"[0..254]
+    "[#{@settings[:application]}:#{@notice['server_environment']['environment_name']}] #{error_class} in #{file}:#{ line[([-200, line.length*-1].max)..-1] }"
   end
   
   def find_or_create_custom_fields
